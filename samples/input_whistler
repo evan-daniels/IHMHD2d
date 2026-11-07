@@ -1,0 +1,44 @@
+x_left
+0.0
+x_right
+6.283185307179586
+y_bottom
+0.0
+y_top
+0.15707963267948966
+J - number of cell in x-direction (per processor)
+50
+K - number of cells in y-direction (total)
+8
+L - components in system
+8
+t_final - simulation time
+20
+dt_out - output interval
+0.02
+cfl - cfl condition scale
+.75
+alpha - minmod3 reconstruction parameter
+1.3
+par_count - number of parameters in parameters array
+10
+gamma - ratio of specific heats passed as a parameter in parameters array
+1.666666667
+problem - 0-> OT, 1->Reconnection, 2->linear whistler dispersion test
+2
+eta
+0
+di
+0.5
+s_B
+1
+s_Bz
+1
+eta_H
+0
+c_whistler - REMOVED, read but ignored (keep 0)
+0
+d_e
+0.1
+c_whistler_inertia - 0 here: the dispersion test measures the undamped whistler (default 0.5)
+0

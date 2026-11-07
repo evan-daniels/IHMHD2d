@@ -1,0 +1,32 @@
+x_left
+0.0
+x_right
+6.283185307179586
+y_bottom
+0.0
+y_top
+6.283185307179586
+J - number of cell in x-direction (per processor)
+32
+K - number of cells in y-direction (total)
+256
+L - components in system
+8
+t_final - simulation time
+3.14159265358979
+dt_out - output interval
+0.314159265358979
+cfl - cfl condition scale
+.75
+alpha - minmod3 reconstruction parameter
+1.3
+par_count - number of parameters in parameters array
+4
+gamma - ratio of specific heats passed as a parameter in parameters array
+1.666666667
+problem - 0-> OT, 1->Reconnection, 2->linear whistler dispersion test
+0
+eta
+0.0
+di
+0.0

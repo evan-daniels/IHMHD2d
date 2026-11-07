@@ -323,7 +323,10 @@ int CENTPACK::centpack_2d_SD2(int id, int p)
 	}while(t < t_final);
 	
 	writeout(un, t, parameters, n, id, p);
-	run_info_2d(dt, sum_t, J, K, cfl, id, p);
+	// ORIGINAL (pre-2026-11-06):
+	// run_info_2d(dt, sum_t, J, K, cfl, id, p);
+	// NEW (2026-11-06): run_info records the scheme settings
+	run_info_2d(dt, sum_t, J, K, cfl, id, p, parameters);
 	
 	return 0;
 }

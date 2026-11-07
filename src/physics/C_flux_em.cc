@@ -32,6 +32,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "centpack_2d_SD2.h"
+#include <cmath>
 
 using namespace std;
 
@@ -47,7 +48,12 @@ void CENTPACK::C_flux_em(
     const double& di,
     doublearray2d& Cx_em, doublearray2d& Cy_em, doublearray2d& Cz_em,
     const int& ywall, const double& s_B, const double& s_Bz,
-    const doublearray3d* E_hyper, const double& c_whistler)
+    // ORIGINAL (pre-2026-11-06):
+    // const doublearray3d* E_hyper, const double& c_whistler)
+    // NEW (2026-11-06): c_whistler is ignored (removed option, kept in the signature); c_wi = c_whistler_inertia
+    // (used only when de > 0); Eedge, if given, receives the edge E* (Ez nodes, Ey x-faces, Ex y-faces)
+    const doublearray3d* E_hyper, const double& c_whistler,
+    const double& c_wi, const double& de, doublearray3d* Eedge)
 
 {
 
@@ -83,8 +89,19 @@ void CENTPACK::C_flux_em(
             // ar = di * Br / (rr * dx_interface(j)); ORIGINAL
             // al = Bl / sqrt(rl) + di * Bl / (rl * dx_interface(j));
             // ar = Br / sqrt(rr) + di * Br / (rr * dx_interface(j));
-            al = Bl / sqrt(rl) + c_whistler * di * Bl / (rl * dx_interface(j));
-            ar = Br / sqrt(rr) + c_whistler * di * Br / (rr * dx_interface(j));
+            // ORIGINAL (pre-2026-11-06):
+            // al = Bl / sqrt(rl) + c_whistler * di * Bl / (rl * dx_interface(j));
+            // ar = Br / sqrt(rr) + c_whistler * di * Br / (rr * dx_interface(j));
+            // NEW (2026-11-06): uncapped whistler term removed (identical to the original with c_whistler = 0)
+            al = Bl / sqrt(rl);
+            ar = Br / sqrt(rr);
+            // NEW (2026-11-06): capped whistler upwind, d_e > 0 only: + c_wi d_i |B| khat / (rho (1 + d_e^2 khat^2)), khat = pi/h
+            if (de > 0.0 && c_wi > 0.0)
+            {
+                const double kh = M_PI/dx_interface(j), cap = 1.0/(1.0 + de*de*kh*kh);
+                al += c_wi*di*Bl*kh*cap/rl;
+                ar += c_wi*di*Br*kh*cap/rr;
+            }
 
 
             ax = std::max(al, ar);
@@ -115,8 +132,19 @@ void CENTPACK::C_flux_em(
             // at_v = di * Bt / (rt * dy_interface(k)); ORIGINAL
             // ab   = Bb / sqrt(rb) + di * Bb / (rb * dy_interface(k));
             // at_v = Bt / sqrt(rt) + di * Bt / (rt * dy_interface(k));
-            ab   = Bb / sqrt(rb) + c_whistler * di * Bb / (rb * dy_interface(k));
-            at_v = Bt / sqrt(rt) + c_whistler * di * Bt / (rt * dy_interface(k));
+            // ORIGINAL (pre-2026-11-06):
+            // ab   = Bb / sqrt(rb) + c_whistler * di * Bb / (rb * dy_interface(k));
+            // at_v = Bt / sqrt(rt) + c_whistler * di * Bt / (rt * dy_interface(k));
+            // NEW (2026-11-06): uncapped whistler term removed (identical to the original with c_whistler = 0)
+            ab   = Bb / sqrt(rb);
+            at_v = Bt / sqrt(rt);
+            // NEW (2026-11-06): capped whistler upwind, d_e > 0 only
+            if (de > 0.0 && c_wi > 0.0)
+            {
+                const double kh = M_PI/dy_interface(k), cap = 1.0/(1.0 + de*de*kh*kh);
+                ab   += c_wi*di*Bb*kh*cap/rb;
+                at_v += c_wi*di*Bt*kh*cap/rt;
+            }
 
 
             ay = std::max(ab, at_v);
@@ -177,6 +205,19 @@ void CENTPACK::C_flux_em(
             Ez_corner(j,K+1) = 0.0;
         }
     }
+
+    // NEW (2026-11-06): edge-field export for Formulation B (energy flux S = E* x B from the exact edge E*)
+    if (Eedge)
+        for (k = 0; k < K+4; k++)
+            for (j = 0; j < J+4; j++)
+            {
+                bool okz = (j >= 1 && j <= J+1 && k >= 1 && k <= K+1);
+                bool oky = (j >= 1 && j <= J+1 && k >= 1 && k <= K+2);
+                bool okx = (j >= 1 && j <= J+2 && k >= 1 && k <= K+1);
+                (*Eedge)(j,k,0) = okz ? Ez_corner(j,k) : 0.0;
+                (*Eedge)(j,k,1) = oky ? Fx_xf(j,k) : 0.0;
+                (*Eedge)(j,k,2) = okx ? -Gy_yf(j,k) : 0.0;
+            }
 
     // ===== (d) Cx_em: Bx face increment, dBx/dt = -dEz/dy =====
     for (k = 2; k < K+2; k++)

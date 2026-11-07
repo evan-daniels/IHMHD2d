@@ -61,7 +61,10 @@ namespace CENTPACK
 	
 	void end_of_step_2d_SD2(const doublearray3d& un, const double& dt, const double& t, double& dt_out, double& t_out, long& n, const double& sum_t, const double& dt_cpu, const doublearray1d& parameters, const int& id, const int& p);
 
-	void run_info_2d(double& dt, double& sum_t, long& J, long& K, double& cfl, const int& id, const int& p);
+	// ORIGINAL (pre-2026-11-06):
+	// void run_info_2d(double& dt, double& sum_t, long& J, long& K, double& cfl, const int& id, const int& p);
+	// NEW (2026-11-06): parameters, to record the scheme settings (IHMHD2d)
+	void run_info_2d(double& dt, double& sum_t, long& J, long& K, double& cfl, const int& id, const int& p, const doublearray1d& parameters);
 	
 ////////////////////////////////////////////////////////////////////////////////
 // AUXILIARY FUNCTIONS -- User defined, see examples
@@ -77,7 +80,10 @@ namespace CENTPACK
 	void electric_field(const doublearray2d& rho_N, const doublearray2d& rho_S, const doublearray2d& rho_E, const doublearray2d& rho_W, const doublearray3d& v_N, const doublearray3d& v_S, const doublearray3d& v_E, const doublearray3d& v_W, const doublearray3d& B_N, const doublearray3d& B_S, const doublearray3d& B_E, const doublearray3d& B_W, const doublearray3d& J_N, const doublearray3d& J_S, const doublearray3d& J_E, const doublearray3d& J_W, doublearray3d& E_N, doublearray3d& E_S, doublearray3d& E_E, doublearray3d& E_W, const double& di, const double& eta);
 
 	// void C_flux_em(const doublearray2d& rho_N, const doublearray2d& rho_S, const doublearray2d& rho_E, const doublearray2d& rho_W, const doublearray3d& B_N, const doublearray3d& B_S, const doublearray3d& B_E, const doublearray3d& B_W, const doublearray3d& E_N, const doublearray3d& E_S, const doublearray3d& E_E, const doublearray3d& E_W, const doublearray1d& lambda_em, const doublearray1d& mu_em, const doublearray1d& dx_interface, const doublearray1d& dy_interface, const double& di, doublearray2d& Cx_em, doublearray2d& Cy_em, doublearray2d& Cz_em);
-	void C_flux_em(const doublearray2d& rho_N, const doublearray2d& rho_S, const doublearray2d& rho_E, const doublearray2d& rho_W, const doublearray3d& B_N, const doublearray3d& B_S, const doublearray3d& B_E, const doublearray3d& B_W, const doublearray3d& E_N, const doublearray3d& E_S, const doublearray3d& E_E, const doublearray3d& E_W, const doublearray1d& lambda_em, const doublearray1d& mu_em, const doublearray1d& dx_interface, const doublearray1d& dy_interface, const double& di, doublearray2d& Cx_em, doublearray2d& Cy_em, doublearray2d& Cz_em, const int& ywall=0, const double& s_B=1.0, const double& s_Bz=1.0, const doublearray3d* E_hyper=0, const double& c_whistler=0.0);
+	// ORIGINAL (pre-2026-11-06):
+	// void C_flux_em(const doublearray2d& rho_N, const doublearray2d& rho_S, const doublearray2d& rho_E, const doublearray2d& rho_W, const doublearray3d& B_N, const doublearray3d& B_S, const doublearray3d& B_E, const doublearray3d& B_W, const doublearray3d& E_N, const doublearray3d& E_S, const doublearray3d& E_E, const doublearray3d& E_W, const doublearray1d& lambda_em, const doublearray1d& mu_em, const doublearray1d& dx_interface, const doublearray1d& dy_interface, const double& di, doublearray2d& Cx_em, doublearray2d& Cy_em, doublearray2d& Cz_em, const int& ywall=0, const double& s_B=1.0, const double& s_Bz=1.0, const doublearray3d* E_hyper=0, const double& c_whistler=0.0);
+	// NEW (2026-11-06): + c_whistler_inertia (c_wi), d_e and the edge-E* export (IHMHD2d)
+	void C_flux_em(const doublearray2d& rho_N, const doublearray2d& rho_S, const doublearray2d& rho_E, const doublearray2d& rho_W, const doublearray3d& B_N, const doublearray3d& B_S, const doublearray3d& B_E, const doublearray3d& B_W, const doublearray3d& E_N, const doublearray3d& E_S, const doublearray3d& E_E, const doublearray3d& E_W, const doublearray1d& lambda_em, const doublearray1d& mu_em, const doublearray1d& dx_interface, const doublearray1d& dy_interface, const double& di, doublearray2d& Cx_em, doublearray2d& Cy_em, doublearray2d& Cz_em, const int& ywall=0, const double& s_B=1.0, const double& s_Bz=1.0, const doublearray3d* E_hyper=0, const double& c_whistler=0.0, const double& c_wi=0.0, const double& de=0.0, doublearray3d* Eedge=0);
 
 	double hyper_em(const doublearray3d& B1_xf, const doublearray3d& B2_yf, const doublearray3d& un, const doublearray1d& dx_interface, const doublearray1d& dy_interface, const double& eta_H, doublearray3d& E_hyper);
 

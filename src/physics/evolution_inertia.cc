@@ -35,6 +35,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "centpack_2d_SD2.h"
+#include <cstdlib>
+#include <cstdio>
+
+// NEW (2026-11-06): IHMHD2d. For d_e > 0 the step uses Formulation B (energy-conserving electron inertia,
+//   see README.md): the fluid evolves e_f = 1/2 rho v^2 + p/(gamma-1) with no field source, the EM
+//   sub-steps hand the exact field-energy change to e_f cell by cell, and the momentum gets the
+//   electron-inertia stress -div T_e, T_e = d_e^2 (J J - 1/2 J^2 I), so the force is J x B'. The total
+//   energy sum e_f + 1/2 <B, B'> is conserved to round-off (EDRIFT=1 prints it every step).
+//   The EM upwind speed includes c_whistler_inertia d_i|B| khat/(rho (1 + d_e^2 khat^2)), khat = pi/h
+//   (parameters(9), default 0.5), and the EM time step includes the same speed.
+//   d_e = 0 runs the original MHD2d step unchanged (bit-identical to CentPackL MHD2d with c_whistler = 0).
+//   Opt-in diagnostics (environment): EDRIFT=1, EFB_LOG=1, EFB_CHECK=N (README.md).
 
 void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublearray3d& B2_yf,
     const doublearray1d& lambda, const doublearray1d& mu,
@@ -57,13 +69,35 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
     const double s_B    = (n_par > 4) ? parameters(4) : 1.0;   // Ez jumps -> Bx, By
     const double s_Bz   = (n_par > 5) ? parameters(5) : 1.0;   // Ey, -Ex jumps -> Bz
     const double eta_H  = (n_par > 6) ? parameters(6) : 0.0;   // hyperresistivity, E += -eta_H lap J
-    const double c_whistler = (n_par > 7) ? parameters(7) : 0.0;   // whistler fraction in the EM upwinding speed
+    // ORIGINAL (pre-2026-11-06):
+    // const double c_whistler = (n_par > 7) ? parameters(7) : 0.0;   // whistler fraction in the EM upwinding speed
+    // NEW (2026-11-06): the uncapped c_whistler option is removed (README.md); slot 7 is read but ignored
+    const double c_whistler_removed = (n_par > 7) ? parameters(7) : 0.0;
     const bool   walls  = ((int) parameters(1) == 1);   // reconnection: conducting walls in y
     const int    yw_J   = walls ? 3 : 0;                  // ghost-fill modes for boundary_conditions_ct
     const int    yw_Bx  = walls ? 1 : 0;
     const int    yw_By  = walls ? 2 : 0;
     // NEW (2026-10-31): electron skin depth (electron inertia), parameters(8), default 0 = MHD2d
     const double de     = (n_par > 8) ? parameters(8) : 0.0;
+    // NEW (2026-11-06): c_whistler_inertia, parameters(9), d_e > 0 only (default 0.5 when par_count < 10)
+    const double c_wi   = (de > 0.0) ? ((n_par > 9) ? parameters(9) : 0.5) : 0.0;
+    {
+        static bool told = false;
+        if (!told && id == 0)
+        {
+            if (c_whistler_removed != 0.0)
+                printf("IHMHD2d: WARNING parameters(7) = c_whistler = %g is ignored (the uncapped c_whistler option was removed)\n", c_whistler_removed);
+            if (de > 0.0)
+                printf("IHMHD2d: c_whistler_inertia = %g%s\n", c_wi, (n_par > 9) ? "" : " (default; par_count < 10)");
+            // NEW (2026-11-07): the EM step no longer includes the capped upwind speed
+            if (de > 0.0 && c_wi > 0.5)
+                printf("IHMHD2d: WARNING c_whistler_inertia = %g: values above the tested 0.5 may need a smaller EM step.\n", c_wi);
+        }
+        told = true;
+    }
+    // NEW (2026-11-06): Formulation B with the conservative fluid energy is the d_e > 0 scheme
+    const bool   efb    = (de > 0.0);
+    doublearray3d* efb_edge = 0;   // edge E* export from C_flux_em, set during Formulation B sub-steps
     const int    hz_x   = walls ? HZ_NEU : HZ_PER;           // Helmholtz kind per component
     const int    hz_y   = walls ? HZ_DIR : HZ_PER;
     const int    hz_z   = walls ? HZ_NEU : HZ_PER;
@@ -218,7 +252,10 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
         C_flux_em(rho_N, rho_S, rho_E, rho_W, B_N, B_S, B_E, B_W,
                   E_N, E_S, E_E, E_W, lambda_em, mu_em,
                   dx_interface, dy_interface, di, Cx_em, Cy_em, Cz_em, walls ? 1 : 0, s_B, s_Bz,
-                  eta_H > 0.0 ? &E_hyper : 0, c_whistler);
+                  // ORIGINAL (pre-2026-11-06):
+                  // eta_H > 0.0 ? &E_hyper : 0, c_whistler);
+                  // NEW (2026-11-06): c_whistler removed (0 = the value of every CentPackL reference and paper run)
+                  eta_H > 0.0 ? &E_hyper : 0, 0.0);
         }
         else
         {
@@ -247,7 +284,10 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
             C_flux_em(rho_N, rho_S, rho_E, rho_W, *Bp_N, *Bp_S, *Bp_E, *Bp_W,
                       E_N, E_S, E_E, E_W, lambda_em, mu_em,
                       dx_interface, dy_interface, di, Cx_em, Cy_em, Cz_em, walls ? 1 : 0, s_B, s_Bz,
-                      eta_H > 0.0 ? &E_hyper : 0, c_whistler);
+                      // ORIGINAL (pre-2026-11-06):
+                      // eta_H > 0.0 ? &E_hyper : 0, c_whistler);
+                      // NEW (2026-11-06): capped whistler upwind (c_whistler_inertia); edge E* exported for Formulation B
+                      eta_H > 0.0 ? &E_hyper : 0, 0.0, c_wi, de, efb_edge);
         }
     };
 
@@ -315,6 +355,171 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
     };
 
     // ------------------------------------------------------------------------
+    // NEW (2026-11-06): Formulation B (d_e > 0).
+    //   EM sub-step: total energy E = e_f + w, w per cell = 1/2 B.B' (face products split half-and-half
+    //     to the cells); E^{n+1} = E^n - dt_em sum_i b_i A[div (S_i + 1/2 d_e^2 G_i)], S = E* x B from the exact
+    //     edge E* of C_flux_em, G = (bdot grad b - b grad bdot) on each B lattice, bdot_i from the Shu-Osher
+    //     stage algebra; so e_f += -dt_em sum_i b_i A[div F_i] - (w^{n+1} - w^n) per cell (exact by construction).
+    //   Fluid step: e_f has no source; momentum += -div T_e, T_e = d_e^2 (J J - 1/2 J^2 I), compact J averaged
+    //     to the fluid faces, so the force is J x B'.
+    //   EFB_CHECK=N (environment): for the first N EM sub-steps print the per-cell exchange check
+    //     Q - [dt sum b_i A(J_i.E_i) + R_RK], R_RK = -(dw - dt sum b_i wdot_i), wdot_i = A[1/2(bdot.B'_i + B_i.Bdot'_i)].
+    //   EFB_LOG=1 (environment): per fluid step, an EFB line with sum Q, sum dt b J.E, sum R_RK (x dA).
+    // ------------------------------------------------------------------------
+    static const long efb_check = getenv("EFB_CHECK") ? atol(getenv("EFB_CHECK")) : 0;
+    static const bool efb_log = getenv("EFB_LOG") != 0 || efb_check > 0;
+    static long efb_nsub = 0;
+    static double efb_sQ = 0.0, efb_sJE = 0.0, efb_sR = 0.0;      // rank-local, this fluid step
+    static doublearray3d *eE = 0, *eB0 = 0, *eBs = 0, *eBps = 0, *eBd = 0, *eCd = 0, *eT = 0, *eZ = 0;
+    static doublearray2d *eDiv = 0, *eW0 = 0, *eQ = 0, *eJE = 0, *eWd = 0;
+    if (efb && eE == 0)
+    {
+        doublearray3d** a3[8] = {&eE, &eB0, &eBs, &eBps, &eBd, &eCd, &eT, &eZ};
+        for (int q = 0; q < 8; q++) *a3[q] = new doublearray3d(J+4, K+4, q == 7 ? 1 : 3);
+        doublearray2d** a2[5] = {&eDiv, &eW0, &eQ, &eJE, &eWd};
+        for (int q = 0; q < 5; q++) { *a2[q] = new doublearray2d(J+4, K+4);
+            for (k = 0; k < K+4; k++) for (j = 0; j < J+4; j++) (**a2[q])(j,k) = 0.0; }
+        for (int q = 0; q < 7; q++) for (k = 0; k < K+4; k++) for (j = 0; j < J+4; j++) for (l = 0; l < 3; l++) (**a3[q])(j,k,l) = 0.0;
+        if (id == 0) printf("IHMHD2d: Formulation B on (d_e = %g), EFB_CHECK %ld, EFB_LOG %d\n", de, efb_check, (int) efb_log);
+    }
+    const int efb_yw[3] = {yw_Bx, yw_By, yw_Bx};
+    // CT ghosts for each component of a 3-component lattice array (Bx: x-faces, By: y-faces, Bz: cells)
+    auto efb_ct3 = [&](doublearray3d& T) {
+        for (int c = 0; c < 3; c++)
+        {
+            for (k = 0; k < K+4; k++) for (j = 0; j < J+4; j++) (*eZ)(j,k,0) = T(j,k,c);
+            boundary_conditions_ct(*eZ, id, p, efb_yw[c]);
+            for (k = 0; k < K+4; k++) for (j = 0; j < J+4; j++) T(j,k,c) = (*eZ)(j,k,0);
+        }
+    };
+    // snapshot of B (prime = false) or B' (prime = true; = B at d_e = 0) on the CT lattices
+    auto efb_snap = [&](doublearray3d& T, bool prime) {
+        bool pr = prime && de > 0.0;
+        for (k = 2; k < K+2; k++)
+            for (j = 2; j < J+2; j++)
+            {
+                T(j,k,0) = pr ? (*Bp1)(j,k,0) : B1_xf(j,k,0);
+                T(j,k,1) = pr ? (*Bp2)(j,k,0) : B2_yf(j,k,0);
+                T(j,k,2) = pr ? (*Bpz)(j,k,0) : un(j,k,6);
+            }
+        efb_ct3(T);
+    };
+    // w per cell, (3): faces split half-and-half
+    auto efb_w = [&](const doublearray3d& B, const doublearray3d& P, long a, long b) {
+        return 0.25*(B(a-1,b,0)*P(a-1,b,0) + B(a,b,0)*P(a,b,0))
+             + 0.25*(B(a,b-1,1)*P(a,b-1,1) + B(a,b,1)*P(a,b,1)) + 0.5*B(a,b,2)*P(a,b,2); };
+    // A[div S] per cell from B (3-comp, CT ghosts) and the edge E* (0 Ez nodes, 1 Ey x-faces, 2 Ex y-faces)
+    auto efb_divS = [&](const doublearray3d& B, const doublearray3d& E, long a, long b) {
+        const double ddx = hx > 0.0 ? hx : dx_cell(2), ddy = hy > 0.0 ? hy : dy_cell(2);
+        auto F1y = [&](long jj, long kk) { return  E(jj,kk,0)*0.5*(B(jj,kk,0) + B(jj,kk+1,0)); };
+        auto F2x = [&](long jj, long kk) { return -E(jj,kk,0)*0.5*(B(jj,kk,1) + B(jj+1,kk,1)); };
+        auto F3x = [&](long jj, long kk) { return  E(jj,kk,1)*0.5*(B(jj,kk,2) + B(jj+1,kk,2)); };
+        auto F3y = [&](long jj, long kk) { return -E(jj,kk,2)*0.5*(B(jj,kk,2) + B(jj,kk+1,2)); };
+        auto dX  = [&](long jj, long kk) { return (F1y(jj,kk) - F1y(jj,kk-1))/ddy; };
+        auto dY  = [&](long jj, long kk) { return (F2x(jj,kk) - F2x(jj-1,kk))/ddx; };
+        return 0.5*(dX(a-1,b) + dX(a,b)) + 0.5*(dY(a,b-1) + dY(a,b))
+             + (F3x(a,b) - F3x(a-1,b))/ddx + (F3y(a,b) - F3y(a,b-1))/ddy; };
+    // A[J.E] per cell, compact J = C^T B on the E lattices
+    auto efb_JE = [&](const doublearray3d& B, const doublearray3d& E, long a, long b) {
+        const double ddx = hx > 0.0 ? hx : dx_cell(2), ddy = hy > 0.0 ? hy : dy_cell(2);
+        auto qa = [&](long jj, long kk) { return -(B(jj,kk+1,0) - B(jj,kk,0))/ddy*E(jj,kk,0); };
+        auto qb = [&](long jj, long kk) { return  (B(jj+1,kk,1) - B(jj,kk,1))/ddx*E(jj,kk,0); };
+        auto qc = [&](long jj, long kk) { return -(B(jj+1,kk,2) - B(jj,kk,2))/ddx*E(jj,kk,1); };
+        auto qd = [&](long jj, long kk) { return  (B(jj,kk+1,2) - B(jj,kk,2))/ddy*E(jj,kk,2); };
+        auto jX = [&](long jj, long kk) { return 0.5*(qa(jj,kk) + qa(jj,kk-1)); };
+        auto jY = [&](long jj, long kk) { return 0.5*(qb(jj,kk) + qb(jj-1,kk)); };
+        return 0.5*(jX(a-1,b) + jX(a,b)) + 0.5*(jY(a,b-1) + jY(a,b))
+             + 0.5*(qc(a,b) + qc(a-1,b)) + 0.5*(qd(a,b) + qd(a,b-1)); };
+    // A[div G(f, g)] per cell, G = (f grad g - g grad f) on each lattice (f = bdot, g = b)
+    auto efb_divG = [&](const doublearray3d& Fd, const doublearray3d& G, long a, long b) {
+        const double ddx = hx > 0.0 ? hx : dx_cell(2), ddy = hy > 0.0 ? hy : dy_cell(2);
+        auto gx = [&](int c, long jj, long kk) { return (Fd(jj,kk,c)*G(jj+1,kk,c) - G(jj,kk,c)*Fd(jj+1,kk,c))/ddx; };
+        auto gy = [&](int c, long jj, long kk) { return (Fd(jj,kk,c)*G(jj,kk+1,c) - G(jj,kk,c)*Fd(jj,kk+1,c))/ddy; };
+        auto dl = [&](int c, long jj, long kk) { return (gx(c,jj,kk) - gx(c,jj-1,kk))/ddx + (gy(c,jj,kk) - gy(c,jj,kk-1))/ddy; };
+        return 0.5*(dl(0,a-1,b) + dl(0,a,b)) + 0.5*(dl(1,a,b-1) + dl(1,a,b)) + dl(2,a,b); };
+    // direct quadratic-form rate A[1/2 (bdot.B' + B.Bdot')] per cell
+    auto efb_wd = [&](const doublearray3d& Bd, const doublearray3d& P, const doublearray3d& B, const doublearray3d& Cd, long a, long b) {
+        auto v = [&](int c, long jj, long kk) { return 0.5*(Bd(jj,kk,c)*P(jj,kk,c) + B(jj,kk,c)*Cd(jj,kk,c)); };
+        return 0.5*(v(0,a-1,b) + v(0,a,b)) + 0.5*(v(1,a,b-1) + v(1,a,b)) + v(2,a,b); };
+
+    // one SSP-RK3 EM sub-step with the Formulation B energy exchange (replaces the three stage lines)
+    auto efb_substep = [&]() {
+        const double A0[3] = {0.0, 0.75, 1.0/3.0}, A1[3] = {1.0, 0.25, 2.0/3.0}, BW[3] = {1.0/6.0, 1.0/6.0, 2.0/3.0};
+        doublearray3d& Pn = *eBps;
+        efb_snap(*eB0, false);
+        efb_snap(Pn, true);
+        for (k = 2; k < K+2; k++)
+            for (j = 2; j < J+2; j++)
+            { (*eW0)(j,k) = efb_w(*eB0, Pn, j, k); (*eDiv)(j,k) = 0.0; (*eJE)(j,k) = 0.0; (*eWd)(j,k) = 0.0; }
+        for (int s = 0; s < 3; s++)
+        {
+            efb_snap(*eBs, false);
+            if (efb_log) efb_snap(Pn, true);
+            efb_edge = eE;
+            em_rhs(BW[s]);
+            efb_edge = 0;
+            if (efb_log)
+            {
+                for (k = 2; k < K+2; k++)
+                    for (j = 2; j < J+2; j++)
+                    { (*eCd)(j,k,0) = Cx_em(j,k)/dt_em; (*eCd)(j,k,1) = Cy_em(j,k)/dt_em; (*eCd)(j,k,2) = Cz_em(j,k)/dt_em; }
+                efb_ct3(*eCd);
+            }
+            em_stage(A0[s], A1[s]);
+            efb_snap(*eT, false);
+            for (k = 0; k < K+4; k++)
+                for (j = 0; j < J+4; j++)
+                    for (l = 0; l < 3; l++)
+                        (*eBd)(j,k,l) = ((*eT)(j,k,l) - A0[s]*(*eB0)(j,k,l) - A1[s]*(*eBs)(j,k,l))/(A1[s]*dt_em);
+            for (k = 2; k < K+2; k++)
+                for (j = 2; j < J+2; j++)
+                {
+                    double d = efb_divS(*eBs, *eE, j, k);
+                    if (de > 0.0) d += 0.5*de*de*efb_divG(*eBd, *eBs, j, k);
+                    (*eDiv)(j,k) += BW[s]*d;
+                    if (efb_log)
+                    {
+                        (*eJE)(j,k) += BW[s]*efb_JE(*eBs, *eE, j, k);
+                        (*eWd)(j,k) += BW[s]*efb_wd(*eBd, Pn, *eBs, *eCd, j, k);
+                    }
+                }
+        }
+        // end of sub-step: exchange to e_f, per cell
+        efb_snap(*eT, false);
+        efb_snap(Pn, true);
+        double rmax = 0.0, qmax = 0.0, rrmax = 0.0, sE = 0.0, sEa = 0.0, sQ = 0.0, sJE = 0.0, sR = 0.0;
+        for (k = 2; k < K+2; k++)
+            for (j = 2; j < J+2; j++)
+            {
+                double dA = dx_cell(j)*dy_cell(k);
+                double dw = efb_w(*eT, Pn, j, k) - (*eW0)(j,k);
+                double dE = -dt_em*(*eDiv)(j,k);
+                double Q  = dE - dw;
+                (*eQ)(j,k) += Q;
+                sE += dE*dA; sEa += fabs(dE)*dA; sQ += Q*dA;
+                if (efb_log)
+                {
+                    double R = -(dw - dt_em*(*eWd)(j,k));
+                    double res = Q - (dt_em*(*eJE)(j,k) + R);
+                    rmax = std::max(rmax, fabs(res)); qmax = std::max(qmax, fabs(Q)); rrmax = std::max(rrmax, fabs(R));
+                    sJE += dt_em*(*eJE)(j,k)*dA; sR += R*dA;
+                }
+            }
+        efb_sQ += sQ; efb_sJE += sJE; efb_sR += sR;
+        if (efb_nsub < efb_check)
+        {
+            double a[3] = {rmax, qmax, rrmax}, ga[3], b[5] = {sE, sEa, sQ, sJE, sR}, gb[5];
+            MPI_Allreduce(a, ga, 3, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+            MPI_Allreduce(b, gb, 5, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+            if (id == 0)
+                printf("EFBCHK sub %ld dt_em %.3e  cell: max|Q - dt bJE - R_RK|/max|Q| %.2e  max|R_RK|/max|Q| %.2e  "
+                       "global: sum dE/sum|dE| %.2e  sum Q %+.6e  sum dt bJE %+.6e  sum R_RK %+.6e\n",
+                       efb_nsub, dt_em, ga[0]/ga[1], ga[2]/ga[1], gb[0]/gb[1], gb[2], gb[3], gb[4]);
+        }
+        efb_nsub++;
+    };
+
+    // ------------------------------------------------------------------------
     // EM sub-cycle: SSP-RK3 steps from the current t_em up to t_target
     // ------------------------------------------------------------------------
     auto em_subcycle = [&](double t_target)
@@ -335,6 +540,21 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
                     // omega(k) = di|B| k^2 / (rho (1 + de^2 k^2)) at k^2 = khat^2_max = 4/dx^2 + 4/dy^2
                     if (de > 0.0)
                         rate /= 1.0 + de*de*(4.0/(dx_cell(j)*dx_cell(j)) + 4.0/(dy_cell(k)*dy_cell(k)));
+                    // NEW (2026-11-06): + the c_whistler_inertia upwind speed c d_i|B| khat/(rho (1 + d_e^2 khat^2)) / h
+                    // per direction, khat = pi/h (d_e > 0 only), at the same cfl_em
+                    // ORIGINAL (pre-2026-11-07):
+                    // if (de > 0.0 && c_wi > 0.0)
+                    // {
+                    //     double Bm = sqrt(u_cell(4)*u_cell(4) + u_cell(5)*u_cell(5) + u_cell(6)*u_cell(6)), rr = std::max(u_cell(0), 0.1);
+                    //     for (int q = 0; q < 2; q++)
+                    //     {
+                    //         double h = q ? dy_cell(k) : dx_cell(j);
+                    //         double kh = M_PI/h;
+                    //         rate += c_wi*di*Bm*kh/(rr*(1.0 + de*de*kh*kh))/h;
+                    //     }
+                    // }
+                    // NEW (2026-11-07): term removed from the EM step (no effect on results at 1/2x, 1x, 2x
+                    // for c = 0.5; doubled wall time). The upwind speed stays in C_flux_em.
                     if (rate > 0.0)
                         dtp_em = std::min(dtp_em, cfl_em/rate);
                     // parabolic limit of the explicit 4th-order term (SSP-RK3 real-axis
@@ -342,7 +562,14 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
                     if (eta_H > 0.0)
                     {
                         double h = std::min(dx_cell(j), dy_cell(k));
-                        dtp_em = std::min(dtp_em, 2.5*h*h*h*h/(64.0*eta_H));
+                        // ORIGINAL (pre-2026-11-06):
+                        // dtp_em = std::min(dtp_em, 2.5*h*h*h*h/(64.0*eta_H));
+                        // NEW (2026-11-06): the eta_H term acts on B', so B relaxes at eta_H lam^2/(1 + d_e^2 lam),
+                        // lam_max = 8/h^2; the factor 2.0 keeps |R_RK3| <= 1 together with |omega dt| <= 1
+                        if (de > 0.0)
+                            dtp_em = std::min(dtp_em, 2.0*(1.0 + 8.0*de*de/(h*h))*h*h*h*h/(64.0*eta_H));
+                        else
+                            dtp_em = std::min(dtp_em, 2.5*h*h*h*h/(64.0*eta_H));
                     }
                 }
 
@@ -375,9 +602,18 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
                     }
 
             // (Butcher weights of this scheme, for the dissipation integrals: 1/6, 1/6, 2/3)
+            // ORIGINAL (pre-2026-11-06):
+            // em_rhs(1.0/6.0);  em_stage(0.0,     1.0);       // u1 = u0 + L(u0)
+            // em_rhs(1.0/6.0);  em_stage(0.75,    0.25);      // u2 = 3/4 u0 + 1/4 (u1 + L(u1))
+            // em_rhs(2.0/3.0);  em_stage(1.0/3.0, 2.0/3.0);   // u3 = 1/3 u0 + 2/3 (u2 + L(u2))
+            // NEW (2026-11-06): d_e > 0 runs the same three stages through efb_substep (energy exchange)
+            if (efb) efb_substep();
+            else
+            {
             em_rhs(1.0/6.0);  em_stage(0.0,     1.0);       // u1 = u0 + L(u0)
             em_rhs(1.0/6.0);  em_stage(0.75,    0.25);      // u2 = 3/4 u0 + 1/4 (u1 + L(u1))
             em_rhs(2.0/3.0);  em_stage(1.0/3.0, 2.0/3.0);   // u3 = 1/3 u0 + 2/3 (u2 + L(u2))
+            }
 
             nsub++;
             t_em += dt_em;
@@ -395,15 +631,130 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
     // (the old interleaving had |amplification| > 1 for every k: growth ~ k^2 dt / 8)
     // ========================================================================
 
+    // ORIGINAL (pre-2026-11-06): the step sequence below, now with the Formulation B calls for d_e > 0
+    // // ---- EM half step 1: v at t^n ----
+    // reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
+    // freeze_fluid();
+    // em_subcycle(0.5*dt_fluid);
+    //
+    // // ---- fluid RK2, B frozen at t^{n+1/2} ----
+    // compute_J();
+    // reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
+    // C_flux_2d_SD2(u_N, u_S, u_E, u_W, lambda, mu, parameters, Jc, C0);
+    // for (int n = 0; n < n_fluid; n++)
+    // {
+    //     l = fluid_comp[n];
+    //     for (k = 2; k < K+2; k++)
+    //         for (j = 2; j < J+2; j++)
+    //             un(j,k,l) += C0(j,k,l);
+    // }
+    // boundary_conditions(un, parameters, id, p);
+    //
+    // reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
+    // C_flux_2d_SD2(u_N, u_S, u_E, u_W, lambda, mu, parameters, Jc, C1);   // same Jc: B unchanged
+    // for (int n = 0; n < n_fluid; n++)
+    // {
+    //     l = fluid_comp[n];
+    //     for (k = 2; k < K+2; k++)
+    //         for (j = 2; j < J+2; j++)
+    //             un(j,k,l) += 0.5*(C1(j,k,l) - C0(j,k,l));
+    // }
+    // boundary_conditions(un, parameters, id, p);
+    //
+    // // ---- EM half step 2: v at t^{n+1} ----
+    // reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
+    // freeze_fluid();
+    // em_subcycle(dt_fluid);
+
+    // NEW (2026-11-06): Formulation B helpers (d_e > 0). e_f = 1/2 rho v^2 + p/(gamma-1); slot 7 stays the total
+    // energy E = e_f + 1/2|B|^2 (cell B) and is rebuilt from e_f after every fluid update and EM half step.
+    const double gam_p = parameters(0);
+    doublearray2d Pc(J+4,K+4), Pl(J+4,K+4), Ekeep(J+4,K+4), Et0(J+4,K+4);
+    auto ef_c = [&](long a, long b) { return un(a,b,7) - 0.5*(un(a,b,4)*un(a,b,4) + un(a,b,5)*un(a,b,5) + un(a,b,6)*un(a,b,6)); };
+    auto setEf = [&](long a, long b, double e) { un(a,b,7) = e + 0.5*(un(a,b,4)*un(a,b,4) + un(a,b,5)*un(a,b,5) + un(a,b,6)*un(a,b,6)); };
+    // e_f rate: d_t e_f + div[(e_f + p) v] = 0 (the field-fluid exchange is applied in the EM step); flux on the
+    // SD2 interface states, central part Rc and LxF part Rl with the fluid spectral radius (as Hx/Hy_flux_2d_SD2)
+    auto efl_rhs = [&](doublearray2d& Rc, doublearray2d& Rl) {
+        doublearray1d uv(L);
+        auto st = [&](const doublearray3d& U, long a, long b, double& e, double& fx, double& fy, double& rx, double& ry) {
+            for (long q = 0; q < L; q++) uv(q) = U(a,b,q);
+            double r = uv(0), vx = uv(1)/r, vy = uv(2)/r, vz = uv(3)/r;
+            double kin = 0.5*r*(vx*vx + vy*vy + vz*vz);
+            double pp = (gam_p - 1.0)*(uv(7) - kin - 0.5*(uv(4)*uv(4) + uv(5)*uv(5) + uv(6)*uv(6)));
+            e = kin + pp/(gam_p - 1.0); fx = (e + pp)*vx; fy = (e + pp)*vy;
+            spectral_radii(uv, parameters, rx, ry); };
+        for (k = 2; k < K+2; k++)
+            for (j = 2; j < J+2; j++)
+            {
+                double el, fxl, fyl, rxl, ryl, er, fxr, fyr, rxr, ryr, Fc[4], Fl[4];
+                st(u_E, j, k, el, fxl, fyl, rxl, ryl); st(u_W, j+1, k, er, fxr, fyr, rxr, ryr);
+                Fc[0] = 0.5*(fxl + fxr); Fl[0] = -0.5*std::max(rxl, rxr)*(er - el);
+                st(u_E, j-1, k, el, fxl, fyl, rxl, ryl); st(u_W, j, k, er, fxr, fyr, rxr, ryr);
+                Fc[1] = 0.5*(fxl + fxr); Fl[1] = -0.5*std::max(rxl, rxr)*(er - el);
+                st(u_N, j, k, el, fxl, fyl, rxl, ryl); st(u_S, j, k+1, er, fxr, fyr, rxr, ryr);
+                Fc[2] = 0.5*(fyl + fyr); Fl[2] = -0.5*std::max(ryl, ryr)*(er - el);
+                st(u_N, j, k-1, el, fxl, fyl, rxl, ryl); st(u_S, j, k, er, fxr, fyr, rxr, ryr);
+                Fc[3] = 0.5*(fyl + fyr); Fl[3] = -0.5*std::max(ryl, ryr)*(er - el);
+                Rc(j,k) = -(Fc[0] - Fc[1])/dx_cell(j) - (Fc[2] - Fc[3])/dy_cell(k);
+                Rl(j,k) = -(Fl[0] - Fl[1])/dx_cell(j) - (Fl[2] - Fl[3])/dy_cell(k);
+            }
+    };
+    // e_f is held through an EM half step (B changes, e_f does not), then the exchange of that half is added
+    auto keep_ef = [&]() { for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) Ekeep(j,k) = ef_c(j,k); };
+    auto restore_ef = [&]() { for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) setEf(j, k, Ekeep(j,k));
+                              boundary_conditions(un, parameters, id, p); };
+    auto efb_apply = [&]() {
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) { setEf(j, k, ef_c(j,k) + (*eQ)(j,k)); (*eQ)(j,k) = 0.0; }
+        boundary_conditions(un, parameters, id, p); };
+    // electron-inertia stress -div T_e, T_e = d_e^2 (J J - 1/2 |J|^2 I), compact J (C^T B) averaged to the fluid
+    // faces; B is frozen in the fluid step, so one evaluation serves both Heun stages (x dt_fluid)
+    static doublearray3d *eDm = 0;
+    if (efb && eDm == 0) eDm = new doublearray3d(J+4, K+4, 3);
+    auto efb_stress = [&]() {
+        efb_snap(*eT, false);
+        const doublearray3d& B = *eT;
+        const double ddx = dx_cell(2), ddy = dy_cell(2), d2 = de*de;
+        auto Jxy = [&](long a, long b) { return  (B(a,b+1,2) - B(a,b,2))/ddy; };                     // Jx on y-face (a,b+1/2)
+        auto Jyx = [&](long a, long b) { return -(B(a+1,b,2) - B(a,b,2))/ddx; };                     // Jy on x-face (a+1/2,b)
+        auto Jzn = [&](long a, long b) { return (B(a+1,b,1) - B(a,b,1))/ddx - (B(a,b+1,0) - B(a,b,0))/ddy; };   // node
+        auto fx = [&](long a, long b, double* f) {   // x-face (a+1/2, b)
+            double jx = 0.25*(Jxy(a,b) + Jxy(a,b-1) + Jxy(a+1,b) + Jxy(a+1,b-1));
+            double jy = Jyx(a,b), jz = 0.5*(Jzn(a,b) + Jzn(a,b-1)), j2 = jx*jx + jy*jy + jz*jz;
+            f[0] = d2*(jx*jx - 0.5*j2); f[1] = d2*jx*jy; f[2] = d2*jx*jz; };
+        auto fy = [&](long a, long b, double* f) {   // y-face (a, b+1/2)
+            double jy = 0.25*(Jyx(a,b) + Jyx(a-1,b) + Jyx(a,b+1) + Jyx(a-1,b+1));
+            double jx = Jxy(a,b), jz = 0.5*(Jzn(a,b) + Jzn(a-1,b)), j2 = jx*jx + jy*jy + jz*jz;
+            f[0] = d2*jy*jx; f[1] = d2*(jy*jy - 0.5*j2); f[2] = d2*jy*jz; };
+        for (k = 2; k < K+2; k++)
+            for (j = 2; j < J+2; j++)
+            {
+                double fe[3], fw_[3], fn[3], fs[3];
+                fx(j, k, fe); fx(j-1, k, fw_); fy(j, k, fn); fy(j, k-1, fs);
+                for (l = 0; l < 3; l++)
+                    (*eDm)(j,k,l) = -dt_fluid*((fe[l] - fw_[l])/ddx + (fn[l] - fs[l])/ddy);
+            }
+    };
+
+    // NEW (2026-11-06): step sequence; every efb branch is d_e > 0 only, so d_e = 0 is the original sequence
     // ---- EM half step 1: v at t^n ----
     reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
     freeze_fluid();
+    if (efb) keep_ef();
     em_subcycle(0.5*dt_fluid);
+    if (efb) { restore_ef(); efb_apply(); }   // B changed, e_f did not; then e_f += exchange of this EM half
 
     // ---- fluid RK2, B frozen at t^{n+1/2} ----
     compute_J();
     reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
     C_flux_2d_SD2(u_N, u_S, u_E, u_W, lambda, mu, parameters, Jc, C0);
+    if (efb)   // J x B' = J x B + d_e^2 J x curl J as -div T_e; e_f0 and its rate from the same state
+    {
+        efb_stress();
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) for (l = 0; l < 3; l++) C0(j,k,l+1) += (*eDm)(j,k,l);
+        efl_rhs(Pc, Pl);
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++)
+        { Ekeep(j,k) = ef_c(j,k); Et0(j,k) = Pc(j,k) + Pl(j,k); }
+    }
     for (int n = 0; n < n_fluid; n++)
     {
         l = fluid_comp[n];
@@ -411,10 +762,17 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
             for (j = 2; j < J+2; j++)
                 un(j,k,l) += C0(j,k,l);
     }
+    if (efb)   // e_f1 = e_f0 + dt R0
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) setEf(j, k, Ekeep(j,k) + dt_fluid*Et0(j,k));
     boundary_conditions(un, parameters, id, p);
 
     reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
     C_flux_2d_SD2(u_N, u_S, u_E, u_W, lambda, mu, parameters, Jc, C1);   // same Jc: B unchanged
+    if (efb)   // same stress (B frozen); e_f rate at the stage-1 state
+    {
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++) for (l = 0; l < 3; l++) C1(j,k,l+1) += (*eDm)(j,k,l);
+        efl_rhs(Pc, Pl);
+    }
     for (int n = 0; n < n_fluid; n++)
     {
         l = fluid_comp[n];
@@ -422,10 +780,41 @@ void CENTPACK::evolution_2d_SD2(doublearray3d& un, doublearray3d& B1_xf, doublea
             for (j = 2; j < J+2; j++)
                 un(j,k,l) += 0.5*(C1(j,k,l) - C0(j,k,l));
     }
+    if (efb)   // Heun, e_f = e_f0 + dt/2 (R0 + R1)
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++)
+            setEf(j, k, Ekeep(j,k) + 0.5*dt_fluid*(Et0(j,k) + Pc(j,k) + Pl(j,k)));
     boundary_conditions(un, parameters, id, p);
 
     // ---- EM half step 2: v at t^{n+1} ----
     reconstruction_2d_SD2(un, u_N, u_S, u_E, u_W, dx_cell, dx_interface, dy_cell, dy_interface, alpha);
     freeze_fluid();
+    if (efb) keep_ef();
     em_subcycle(dt_fluid);
+    if (efb) { restore_ef(); efb_apply(); }
+    if (efb && efb_log)   // EFB_LOG: per fluid step sums (x dA) of the exchange, its J.E part and R_RK
+    {
+        double a[3] = {efb_sQ, efb_sJE, efb_sR}, g[3];
+        MPI_Allreduce(a, g, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        static double t_e = 0.0; t_e += dt_fluid;
+        if (id == 0) printf("EFB t %.5f Q %+.9e JE %+.9e RRK %+.9e\n", t_e, g[0], g[1], g[2]);
+        efb_sQ = efb_sJE = efb_sR = 0.0;
+    }
+
+    // NEW (2026-11-06): EDRIFT=1 (environment): total energy sum e_f + 1/2 <B, B'> per fluid step (B' = B at d_e = 0);
+    // diagnostic only, it changes nothing in the solution
+    if (getenv("EDRIFT"))
+    {
+        double ef = 0.0, eb = 0.0, g2[2], l2[2];
+        const double h1 = dx_cell(2), h2 = dy_cell(2);
+        for (k = 2; k < K+2; k++) for (j = 2; j < J+2; j++)
+        {
+            ef += ef_c(j,k)*h1*h2;
+            if (de > 0.0) eb += 0.5*(B1_xf(j,k,0)*(*Bp1)(j,k,0) + B2_yf(j,k,0)*(*Bp2)(j,k,0) + un(j,k,6)*(*Bpz)(j,k,0))*h1*h2;
+            else          eb += 0.5*(B1_xf(j,k,0)*B1_xf(j,k,0) + B2_yf(j,k,0)*B2_yf(j,k,0) + un(j,k,6)*un(j,k,6))*h1*h2;
+        }
+        l2[0] = ef; l2[1] = eb;
+        MPI_Allreduce(l2, g2, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        static double t_ed = 0.0; t_ed += dt_fluid;
+        if (id == 0) printf("EDRIFT t %.5f Ef %.12e EB %.12e Etot %.12e\n", t_ed, g2[0], g2[1], g2[0] + g2[1]);
+    }
 }

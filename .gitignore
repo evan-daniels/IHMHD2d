@@ -1,0 +1,19 @@
+# build products
+IHMHD2d
+*.dSYM/
+*.o
+tests/test_helmholtz_walls
+tests/test_energy_identities
+# run output (any run folder, including tests/run_de0)
+*_files/
+!tests/reference/*_files/
+run.log
+run_info.txt
+energy_log.txt
+!tests/reference/energy_log.txt
+wall.txt
+tests/run_de0/
+# python
+__pycache__/
+*.pyc
+.DS_Store

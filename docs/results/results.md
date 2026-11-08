@@ -1,6 +1,7 @@
 # IHMHD2d verification results
 
-All runs were made with the IHMHD2d binary at this commit's sources (built on macOS, MPICH, 10 ranks unless noted).
+All runs except the 2x GEM run were made with the IHMHD2d binary at this commit's sources (built on macOS, MPICH,
+10 ranks unless noted); see the GEM section for the 2x run.
 The run output is not in the repository; the numbers below are taken from it.
 
 ## Regression and unit tests (`make test`)
@@ -46,12 +47,29 @@ under x → −x, with the uncapped runs for comparison).
 |---|---|---|---|---|---|
 | ½x | 1.832 / 3.022 / 2.730 | 0.260 at t = 17.5 | 4.0e-12 / 4.7e-10 | 0 | 410 s |
 | 1x | 1.451 / 2.979 / 2.782 | 0.294 at t = 18.0 | 3.4e-11 / 4.6e-10 | 0 | 1772 s |
-| 2x | pending | pending | pending | pending | pending |
+| 2x | 1.289 / 2.770 / 2.381 | 0.276 at t = 18.5 | 2.7e-4 / 1.4e-2 | 0 | 4945 s |
 
-Without the capped upwinding (c_whistler_inertia = 0) a grid-scale (λ_x ≈ 3.3Δx) Hall mode breaks the x → −x
-symmetry from t ≈ 19; the u_y mirror error reaches 3.2e-4 (½x) and 1.6e-3 (1x) by t = 30.
-With c = 0.5 the mirror error stays at round-off until the plasmoid forms (t ≈ 25) and then grows slowly
-at physical wavelengths. c = 0.25 does not remove the mode (mirror defect 1.7e-4 by t = 22 at 1x).
+Island onset: ½x t = 22.0, 1x t = 25.0, 2x t = 18.5.
 
-The ½x and 1x runs are bit-identical to the development build they were ported from (all field files,
-energy_log, EDRIFT).
+Without the capped upwinding (c_whistler_inertia = 0) a grid-scale (λ_x ≈ 3Δx) Hall mode breaks the x → −x
+symmetry from t ≈ 19 at every resolution; the u_y mirror error reaches 3.2e-4 (½x), 1.6e-3 (1x) and 4.4e-4 (2x) by t = 30.
+c = 0.25 does not remove the mode (mirror defect 1.7e-4 by t = 22 at 1x).
+
+With c = 0.5:
+
+- ½x and 1x: the mirror error stays at round-off until the island forms (t = 22 and 25) and then grows slowly
+  (to about 5e-10 at t = 40) at physical wavelengths.
+- 2x: the grid-scale mode is gone, but the island forms earlier (t = 18.5), and an odd part with
+  λ_x ≈ 2–6 (60–190Δx) grows from round-off between t = 18.0 and 18.5, at the island onset
+  (output every 0.5 does not resolve the order more finely). It saturates near 1e-4 at t ≈ 19.5 and then
+  follows the uncapped 2x run within a factor of a few (2.7e-4 at t = 30, 1.4e-2 at t = 40). The scale says this is
+  a physical instability of the forming island amplifying round-off asymmetry, not the grid-scale mode;
+  the run is not mirror-symmetric after t ≈ 19.
+- There is a transient round-off bump of 1e-10 at t ≈ 7.5 at 2x, which decays by t = 10.
+
+The 2x run was made with the development build (fbcand3, whose EM step also contains the c_whistler_inertia speed).
+At 2x that term never binds: the final IHMHD2d binary reproduces its EDRIFT and EM sub-step lines bit-for-bit to
+t = 1 (1 EM sub-step per half step throughout, as in the full 2x run).
+
+The ½x and 1x runs were made with the final IHMHD2d binary and are bit-identical to the development build
+without the time-step term (all field files, energy_log, EDRIFT).

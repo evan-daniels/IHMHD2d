@@ -135,4 +135,4 @@ The license for the rest of this code is to be decided.
 
 ---
 
-I'm not versed in coding standards and documentation conventions, so this README was written with help from Claude (Anthropic).
+DISCLAIMER: I’m not versed in coding standards and documentation conventions, so this README was written with help from generative AI (Claude, Anthropic).
